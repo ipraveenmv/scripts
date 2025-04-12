@@ -69,34 +69,26 @@ chown -R www-data:www-data /mnt/files
 # Configure Apache
 tee -a /etc/apache2/sites-available/nextcloud.conf << EOF
 <VirtualHost *:80>
-    ServerName $HOSTNAME
-    Redirect permanent / https://$HOSTNAME/
-</VirtualHost>
+ServerName $HOSTNAME
+DocumentRoot /var/www/html/nextcloud
 
-<VirtualHost *:443>
-    ServerName $HOSTNAME
-    DocumentRoot /var/www/html/nextcloud
+<Directory /var/www/html/nextcloud/>
+ Require all granted
+ Options FollowSymlinks MultiViews
+ AllowOverride All
+ <IfModule mod_dav.c>
+ Dav off
+ </IfModule>
+</Directory>
 
-    <Directory /var/www/html/nextcloud/>
-        Require all granted
-        Options FollowSymlinks MultiViews
-        AllowOverride All
-        <IfModule mod_dav.c>
-            Dav off
-        </IfModule>
-    </Directory>
-
-    ErrorLog /var/log/apache2/$HOSTNAME.error_log
-    CustomLog /var/log/apache2/$HOSTNAME.access_log common
-
-    Header always set Strict-Transport-Security "max-age=15552000; includeSubDomains"
+ErrorLog /var/log/apache2/$HOSTNAME.error_log
+CustomLog /var/log/apache2/$HOSTNAME.access_log common
 </VirtualHost>
 EOF
 
 a2ensite nextcloud.conf
 a2enmod rewrite
-a2enmod headers
 
-# Obtain a Certificate from Let's Encrypt
+#Obtain a Certificate from Let's Encrypt
 certbot run -d $HOSTNAME --agree-tos --apache -m $EMAIL -n
 systemctl restart apache2
