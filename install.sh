@@ -107,7 +107,7 @@ chown -R www-data:www-data nextcloud
 chown -R www-data:www-data /mnt/files
 
 # Configure Apache
-tee /etc/apache2/sites-available/nextcloud.conf << EOF
+tee -a /etc/apache2/sites-available/nextcloud.conf << EOF
 <VirtualHost *:80>
 ServerName $HOSTNAME
 DocumentRoot /var/www/html/nextcloud
@@ -122,4 +122,13 @@ DocumentRoot /var/www/html/nextcloud
 </Directory>
 
 ErrorLog /var/log/apache2/$HOSTNAME.error_log
-CustomLog /var/log/apache2/$HOST
+CustomLog /var/log/apache2/$HOSTNAME.access_log common
+</VirtualHost>
+EOF
+
+a2ensite nextcloud.conf
+a2enmod rewrite
+
+#Obtain a Certificate from Let's Encrypt
+certbot run -d $HOSTNAME --agree-tos --apache -m $EMAIL -n
+systemctl restart apache2
