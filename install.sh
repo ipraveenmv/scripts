@@ -39,7 +39,7 @@ done
 # Install Dependencies
 apt-get update
 apt-get upgrade -y
-apt-get install -y php8.3 php8.3-cli php8.3-common php8.3-imap php8.3-redis php8.3-snmp php8.3-xml php8.3-zip php8.3-mbstring php8.3-curl php8.3-gd php8.3-mysql apache2 mariadb-server certbot nfs-common python3-certbot-apache unzip
+apt-get install -y  php8.1 php8.1-cli php8.1-common php8.1-imap php8.1-redis php8.1-snmp php8.1-xml php8.1-zip php8.1-mbstring php8.1-curl php8.1-gd php8.1-mysql apache2 mariadb-server certbot nfs-common python3-certbot-apache unzip
 
 # Create the database and user
 DBPASSWORD=$(openssl rand -base64 14)
