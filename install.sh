@@ -3,10 +3,7 @@
 export DEBIAN_FRONTEND=noninteractive
 
 # defaults 
-HOSTNAME="localhost"
-USERNAME="admin"
-PASSWORD="password123"
-EMAIL="test@example.com"
+
 STORAGEACCOUNT=""
 CONTAINER=""
 
