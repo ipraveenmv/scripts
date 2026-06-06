@@ -1,0 +1,310 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "adminUsername": {
+      "type": "string",
+      "defaultValue": "azureuser",
+      "metadata": { "description": "Username for the Virtual Machine." }
+    },
+    "sshPublicKey": {
+      "type": "string",
+      "metadata": { "description": "SSH public key (contents of ~/.ssh/id_ed25519.pub or id_rsa.pub) for VM login." }
+    },
+    "sslEmail": {
+      "type": "string",
+      "metadata": { "description": "Email used by AIO for Let's Encrypt certificate registration." }
+    },
+    "dnsNameForPublicIP": {
+      "type": "string",
+      "metadata": { "description": "Unique DNS label for the Public IP (becomes <label>.<region>.cloudapp.azure.com)." }
+    },
+    "nextcloudFqdn": {
+      "type": "string",
+      "metadata": { "description": "Public FQDN you will point at the VM (e.g. cloud.example.com). Use the cloudapp.azure.com name if you don't have a custom domain." }
+    },
+    "allowedSshSourceCidr": {
+      "type": "string",
+      "defaultValue": "*",
+      "metadata": { "description": "Source CIDR allowed to SSH. Set to your home/office IP (e.g. 203.0.113.4/32) for safety. '*' opens to the internet (not recommended)." }
+    },
+    "vmSize": {
+      "type": "string",
+      "defaultValue": "Standard_B2pls_v2",
+      "metadata": { "description": "VM size. Default is ARM64 burstable (2 vCPU, 4 GB). Use Standard_B2s for x86 if you need it." }
+    }
+  },
+  "variables": {
+    "location": "[resourceGroup().location]",
+    "storageAccountName": "[concat('ncstor', uniqueString(resourceGroup().id))]",
+    "blobContainerName": "photos",
+    "imagePublisher": "Canonical",
+    "imageOffer": "ubuntu-24_04-lts",
+    "imageSku": "server-arm64",
+    "vmName": "nextcloud-vm",
+    "osDiskName": "nextcloud-osdisk",
+    "dataDiskName": "nextcloud-datadisk",
+    "nicName": "nextcloud-nic",
+    "publicIpName": "nextcloud-pip",
+    "nsgName": "nextcloud-nsg",
+    "vnetName": "nextcloud-vnet",
+    "subnetName": "nextcloud-subnet",
+    "addressPrefix": "10.0.0.0/16",
+    "subnetPrefix": "10.0.0.0/24",
+    "vnetId": "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]",
+    "subnetRef": "[concat(variables('vnetId'), '/subnets/', variables('subnetName'))]",
+    "installScriptUrl": "https://raw.githubusercontent.com/ipraveenmv/scripts/refs/heads/main/install-aio.sh"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2023-05-01",
+      "name": "[variables('storageAccountName')]",
+      "location": "[variables('location')]",
+      "sku": { "name": "Standard_LRS" },
+      "kind": "StorageV2",
+      "properties": {
+        "accessTier": "Cool",
+        "allowBlobPublicAccess": false,
+        "minimumTlsVersion": "TLS1_2",
+        "supportsHttpsTrafficOnly": true,
+        "networkAcls": { "defaultAction": "Allow" }
+      }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/default/{1}', variables('storageAccountName'), variables('blobContainerName'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+      ],
+      "properties": { "publicAccess": "None" }
+    },
+    {
+      "type": "Microsoft.Network/publicIPAddresses",
+      "apiVersion": "2023-09-01",
+      "name": "[variables('publicIpName')]",
+      "location": "[variables('location')]",
+      "sku": { "name": "Standard" },
+      "properties": {
+        "publicIPAllocationMethod": "Static",
+        "publicIPAddressVersion": "IPv4",
+        "dnsSettings": { "domainNameLabel": "[parameters('dnsNameForPublicIP')]" }
+      }
+    },
+    {
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "apiVersion": "2023-09-01",
+      "name": "[variables('nsgName')]",
+      "location": "[variables('location')]",
+      "properties": {
+        "securityRules": [
+          {
+            "name": "AllowSSH",
+            "properties": {
+              "priority": 1000, "direction": "Inbound", "access": "Allow",
+              "protocol": "Tcp",
+              "sourceAddressPrefix": "[parameters('allowedSshSourceCidr')]",
+              "sourcePortRange": "*",
+              "destinationAddressPrefix": "*", "destinationPortRange": "22"
+            }
+          },
+          {
+            "name": "AllowHTTP",
+            "properties": {
+              "priority": 1010, "direction": "Inbound", "access": "Allow",
+              "protocol": "Tcp", "sourceAddressPrefix": "*", "sourcePortRange": "*",
+              "destinationAddressPrefix": "*", "destinationPortRange": "80"
+            }
+          },
+          {
+            "name": "AllowHTTPS",
+            "properties": {
+              "priority": 1020, "direction": "Inbound", "access": "Allow",
+              "protocol": "Tcp", "sourceAddressPrefix": "*", "sourcePortRange": "*",
+              "destinationAddressPrefix": "*", "destinationPortRange": "443"
+            }
+          },
+          {
+            "name": "AllowAIOAdmin",
+            "properties": {
+              "priority": 1030, "direction": "Inbound", "access": "Allow",
+              "protocol": "Tcp",
+              "sourceAddressPrefix": "[parameters('allowedSshSourceCidr')]",
+              "sourcePortRange": "*",
+              "destinationAddressPrefix": "*", "destinationPortRange": "8080"
+            }
+          },
+          {
+            "name": "AllowTalkTcp",
+            "properties": {
+              "priority": 1040, "direction": "Inbound", "access": "Allow",
+              "protocol": "Tcp", "sourceAddressPrefix": "*", "sourcePortRange": "*",
+              "destinationAddressPrefix": "*", "destinationPortRange": "3478"
+            }
+          },
+          {
+            "name": "AllowTalkUdp",
+            "properties": {
+              "priority": 1050, "direction": "Inbound", "access": "Allow",
+              "protocol": "Udp", "sourceAddressPrefix": "*", "sourcePortRange": "*",
+              "destinationAddressPrefix": "*", "destinationPortRange": "3478"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Network/virtualNetworks",
+      "apiVersion": "2023-09-01",
+      "name": "[variables('vnetName')]",
+      "location": "[variables('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"
+      ],
+      "properties": {
+        "addressSpace": { "addressPrefixes": [ "[variables('addressPrefix')]" ] },
+        "subnets": [
+          {
+            "name": "[variables('subnetName')]",
+            "properties": {
+              "addressPrefix": "[variables('subnetPrefix')]",
+              "networkSecurityGroup": {
+                "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Network/networkInterfaces",
+      "apiVersion": "2023-09-01",
+      "name": "[variables('nicName')]",
+      "location": "[variables('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/publicIPAddresses', variables('publicIpName'))]",
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+      ],
+      "properties": {
+        "ipConfigurations": [
+          {
+            "name": "ipconfig1",
+            "properties": {
+              "privateIPAllocationMethod": "Dynamic",
+              "publicIPAddress": {
+                "id": "[resourceId('Microsoft.Network/publicIPAddresses', variables('publicIpName'))]"
+              },
+              "subnet": { "id": "[variables('subnetRef')]" }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines",
+      "apiVersion": "2024-03-01",
+      "name": "[variables('vmName')]",
+      "location": "[variables('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]",
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+      ],
+      "identity": { "type": "SystemAssigned" },
+      "properties": {
+        "hardwareProfile": { "vmSize": "[parameters('vmSize')]" },
+        "osProfile": {
+          "computerName": "[variables('vmName')]",
+          "adminUsername": "[parameters('adminUsername')]",
+          "linuxConfiguration": {
+            "disablePasswordAuthentication": true,
+            "ssh": {
+              "publicKeys": [
+                {
+                  "path": "[concat('/home/', parameters('adminUsername'), '/.ssh/authorized_keys')]",
+                  "keyData": "[parameters('sshPublicKey')]"
+                }
+              ]
+            }
+          }
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[variables('imagePublisher')]",
+            "offer": "[variables('imageOffer')]",
+            "sku": "[variables('imageSku')]",
+            "version": "latest"
+          },
+          "osDisk": {
+            "name": "[variables('osDiskName')]",
+            "createOption": "FromImage",
+            "diskSizeGB": 30,
+            "managedDisk": { "storageAccountType": "StandardSSD_LRS" }
+          },
+          "dataDisks": [
+            {
+              "name": "[variables('dataDiskName')]",
+              "lun": 0,
+              "createOption": "Empty",
+              "diskSizeGB": 128,
+              "managedDisk": { "storageAccountType": "StandardSSD_LRS" }
+            }
+          ]
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            { "id": "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]" }
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines/extensions",
+      "apiVersion": "2024-03-01",
+      "name": "[concat(variables('vmName'), '/nextcloud-aio-setup')]",
+      "location": "[variables('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Compute/virtualMachines', variables('vmName'))]",
+        "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', variables('storageAccountName'), 'default', variables('blobContainerName'))]"
+      ],
+      "properties": {
+        "publisher": "Microsoft.Azure.Extensions",
+        "type": "CustomScript",
+        "typeHandlerVersion": "2.1",
+        "autoUpgradeMinorVersion": true,
+        "settings": {
+          "fileUris": [ "[variables('installScriptUrl')]" ]
+        },
+        "protectedSettings": {
+          "commandToExecute": "[concat('bash install-aio.sh --fqdn=', parameters('nextcloudFqdn'), ' --email=', parameters('sslEmail'))]"
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "publicFqdn": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Network/publicIPAddresses', variables('publicIpName'))).dnsSettings.fqdn]"
+    },
+    "publicIp": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Network/publicIPAddresses', variables('publicIpName'))).ipAddress]"
+    },
+    "aioAdminUrl": {
+      "type": "string",
+      "value": "[concat('https://', reference(resourceId('Microsoft.Network/publicIPAddresses', variables('publicIpName'))).dnsSettings.fqdn, ':8080')]"
+    },
+    "storageAccountName": {
+      "type": "string",
+      "value": "[variables('storageAccountName')]"
+    },
+    "blobContainerName": {
+      "type": "string",
+      "value": "[variables('blobContainerName')]"
+    },
+    "sshCommand": {
+      "type": "string",
+      "value": "[concat('ssh ', parameters('adminUsername'), '@', reference(resourceId('Microsoft.Network/publicIPAddresses', variables('publicIpName'))).dnsSettings.fqdn)]"
+    }
+  }
+}
